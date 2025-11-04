@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { db } from './firebase';
-import { ref, onValue, push, set, remove, update } from 'https://www.gstatic.com/firebasejs/12.4.0/firebase-database.js';
 import Column from './components/Column';
 import ColumnModal from './components/ColumnModal';
 import './styles.css';
+
+const API_URL = 'http://localhost:5000';
 
 function App() {
   const [columns, setColumns] = useState([]);
@@ -14,156 +14,276 @@ function App() {
   const [draggedCardColumnId, setDraggedCardColumnId] = useState(null);
 
   useEffect(() => {
-    const columnsRef = ref(db, 'columns');
-    
-    const unsubscribe = onValue(columnsRef, (snapshot) => {
-      const data = snapshot.val();
-      if (data) {
-        const columnsArray = [];
-        for (let key in data) {
-          const columnData = data[key];
-          let cardsData = {};
-          if (columnData.cards && typeof columnData.cards === 'object') {
-            cardsData = columnData.cards;
-          }
-          
-          columnsArray.push({
-            id: key,
-            name: columnData.name || '',
-            collapsed: columnData.collapsed || false,
-            cards: cardsData,
-            order: columnData.order !== undefined ? columnData.order : 999
-          });
-        }
-        // 카드 순서 정렬
-        columnsArray.forEach(column => {
-          if (column.cards && typeof column.cards === 'object') {
-            const sortedCards = {};
-            const cardsArray = Object.entries(column.cards).map(([cardId, card]) => ({
-              id: cardId,
-              ...card,
-              order: card.order !== undefined ? card.order : 999
-            }));
-            cardsArray.sort((a, b) => a.order - b.order);
-            cardsArray.forEach(card => {
-              sortedCards[card.id] = { text: card.text, order: card.order };
-            });
-            column.cards = sortedCards;
-          }
-        });
-        columnsArray.sort((a, b) => a.order - b.order);
-        setColumns(columnsArray);
-      } else {
-        createDefaultColumns();
-      }
-    }, (error) => {
-      console.error('Firebase 데이터 읽기 오류:', error);
-    });
-
-    return () => unsubscribe();
+    fetchColumns();
   }, []);
 
-  const createDefaultColumns = () => {
-    const columnsRef = ref(db, 'columns');
-    
-    const doingRef = push(columnsRef);
-    set(doingRef, {
-      name: 'doing',
-      collapsed: false,
-      cards: {},
-      order: 0
-    });
-    
-    const doneTodayRef = push(columnsRef);
-    set(doneTodayRef, {
-      name: 'done today',
-      collapsed: false,
-      cards: {},
-      order: 1
-    });
-  };
-
-  const handleCreateColumn = (name) => {
-    const columnsRef = ref(db, 'columns');
-    const newColumnRef = push(columnsRef);
-    set(newColumnRef, {
-      name: name,
-      collapsed: false,
-      cards: {},
-      order: columns.length
-    });
-    setIsModalOpen(false);
-  };
-
-  const handleDeleteColumn = (columnId) => {
-    if (window.confirm('이 박스를 삭제하시겠습니까? 모든 카드도 함께 삭제됩니다.')) {
-      const columnRef = ref(db, `columns/${columnId}`);
-      remove(columnRef);
+  const fetchColumns = async () => {
+    try {
+      console.log('📤 [칼럼 조회 요청]', `${API_URL}/api/columns`);
+      const response = await fetch(`${API_URL}/api/columns`);
+      
+      console.log('📥 [칼럼 조회 응답]', response.status, response.statusText);
+      
+      if (response.ok) {
+        const data = await response.json();
+        console.log('✅ [칼럼 조회 성공]', data);
+        
+        if (data && data.length > 0) {
+          const columnsArray = data.map(column => ({
+            id: column._id || column.id,
+            name: column.name || '',
+            collapsed: column.collapsed || false,
+            cards: column.cards || {},
+            order: column.order !== undefined ? column.order : 999
+          }));
+          // 카드 순서 정렬
+          columnsArray.forEach(column => {
+            if (column.cards && typeof column.cards === 'object') {
+              const sortedCards = {};
+              const cardsArray = Object.entries(column.cards).map(([cardId, card]) => ({
+                id: cardId,
+                ...card,
+                order: card.order !== undefined ? card.order : 999
+              }));
+              cardsArray.sort((a, b) => a.order - b.order);
+              cardsArray.forEach(card => {
+                sortedCards[card.id] = { text: card.text, order: card.order };
+              });
+              column.cards = sortedCards;
+            }
+          });
+          columnsArray.sort((a, b) => a.order - b.order);
+          setColumns(columnsArray);
+        } else {
+          console.log('📝 칼럼이 없어서 기본 칼럼 생성');
+          createDefaultColumns();
+        }
+      } else {
+        const errorData = await response.json().catch(() => ({ message: response.statusText }));
+        console.error('❌ [칼럼 조회 실패]', errorData);
+        createDefaultColumns();
+      }
+    } catch (error) {
+      console.error('❌ [API 호출 오류]', error);
+      createDefaultColumns();
     }
   };
 
-  const handleToggleColumn = (columnId) => {
+  const createDefaultColumns = async () => {
+    try {
+      const defaultColumns = [
+        { name: 'doing', collapsed: false, cards: {}, order: 0 },
+        { name: 'done today', collapsed: false, cards: {}, order: 1 }
+      ];
+
+      for (const column of defaultColumns) {
+        await fetch(`${API_URL}/api/columns`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(column)
+        });
+      }
+      fetchColumns();
+    } catch (error) {
+      console.error('기본 칼럼 생성 오류:', error);
+    }
+  };
+
+  const handleCreateColumn = async (name) => {
+    try {
+      console.log('📤 [칼럼 생성 요청]', name);
+      const response = await fetch(`${API_URL}/api/columns`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: name,
+          collapsed: false,
+          cards: {},
+          order: columns.length
+        })
+      });
+      
+      console.log('📥 [칼럼 생성 응답]', response.status, response.statusText);
+      
+      if (response.ok) {
+        const data = await response.json();
+        console.log('✅ [칼럼 생성 성공]', data);
+        fetchColumns();
+        setIsModalOpen(false);
+      } else {
+        const errorData = await response.json().catch(() => ({ message: '알 수 없는 오류' }));
+        console.error('❌ [칼럼 생성 실패]', errorData);
+        alert(`칼럼 생성 실패: ${errorData.message || response.statusText}`);
+      }
+    } catch (error) {
+      console.error('❌ [칼럼 생성 오류]', error);
+      alert(`칼럼 생성 중 오류가 발생했습니다: ${error.message}`);
+    }
+  };
+
+  const handleDeleteColumn = async (columnId) => {
+    if (window.confirm('이 박스를 삭제하시겠습니까? 모든 카드도 함께 삭제됩니다.')) {
+      try {
+        console.log('📤 [칼럼 삭제 요청]', columnId);
+        const response = await fetch(`${API_URL}/api/columns/${columnId}`, {
+          method: 'DELETE'
+        });
+        
+        console.log('📥 [칼럼 삭제 응답]', response.status, response.statusText);
+        
+        if (response.ok) {
+          const data = await response.json();
+          console.log('✅ [칼럼 삭제 성공]', data);
+          fetchColumns();
+        } else {
+          const errorData = await response.json().catch(() => ({ message: '알 수 없는 오류' }));
+          console.error('❌ [칼럼 삭제 실패]', errorData);
+          alert(`칼럼 삭제 실패: ${errorData.message || response.statusText}`);
+        }
+      } catch (error) {
+        console.error('❌ [칼럼 삭제 오류]', error);
+        alert(`칼럼 삭제 중 오류가 발생했습니다: ${error.message}`);
+      }
+    }
+  };
+
+  const handleToggleColumn = async (columnId) => {
     const column = columns.find(c => c.id === columnId);
     if (column) {
-      const columnRef = ref(db, `columns/${columnId}`);
-      update(columnRef, {
-        collapsed: !column.collapsed
-      });
+      try {
+        const response = await fetch(`${API_URL}/api/columns/${columnId}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            collapsed: !column.collapsed
+          })
+        });
+        if (response.ok) {
+          fetchColumns();
+        }
+      } catch (error) {
+        console.error('칼럼 토글 오류:', error);
+      }
     }
   };
 
-  const handleUpdateColumnName = (columnId, newName) => {
+  const handleUpdateColumnName = async (columnId, newName) => {
     if (!newName || !newName.trim()) {
       return;
     }
-    const columnRef = ref(db, `columns/${columnId}`);
-    update(columnRef, {
-      name: newName.trim()
-    });
+    try {
+      const response = await fetch(`${API_URL}/api/columns/${columnId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: newName.trim()
+        })
+      });
+      if (response.ok) {
+        fetchColumns();
+      }
+    } catch (error) {
+      console.error('칼럼 이름 수정 오류:', error);
+    }
   };
 
-  const handleAddCard = (columnId, text) => {
+  const handleAddCard = async (columnId, text) => {
     if (!columnId || !text) {
-      console.error('카드 추가 실패: columnId 또는 text가 없습니다.');
+      console.error('❌ 카드 추가 실패: columnId 또는 text가 없습니다.');
       return;
     }
     
-    const column = columns.find(c => c.id === columnId);
-    const cardCount = column && column.cards ? Object.keys(column.cards).length : 0;
-    
-    const cardsRef = ref(db, `columns/${columnId}/cards`);
-    push(cardsRef, {
-      text: text,
-      order: cardCount // 새 카드는 마지막에 추가
-    }).catch((error) => {
-      console.error('카드 추가 오류:', error);
-      alert('카드를 추가하는 중 오류가 발생했습니다: ' + error.message);
-    });
+    try {
+      console.log('📤 [카드 추가 요청]', { columnId, text });
+      const response = await fetch(`${API_URL}/api/columns/${columnId}/cards`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text: text,
+          order: columns.find(c => c.id === columnId)?.cards ? Object.keys(columns.find(c => c.id === columnId).cards).length : 0
+        })
+      });
+      
+      console.log('📥 [카드 추가 응답]', response.status, response.statusText);
+      
+      if (response.ok) {
+        const data = await response.json();
+        console.log('✅ [카드 추가 성공]', data);
+        fetchColumns();
+      } else {
+        const errorData = await response.json().catch(() => ({ message: '알 수 없는 오류' }));
+        console.error('❌ [카드 추가 실패]', errorData);
+        alert(`카드 추가 실패: ${errorData.message || response.statusText}`);
+      }
+    } catch (error) {
+      console.error('❌ [카드 추가 오류]', error);
+      alert(`카드를 추가하는 중 오류가 발생했습니다: ${error.message}`);
+    }
   };
 
-  const handleUpdateCard = (columnId, cardId, newText) => {
+  const handleUpdateCard = async (columnId, cardId, newText) => {
     if (newText) {
-      const column = columns.find(c => c.id === columnId);
-      const card = column?.cards?.[cardId];
-      const currentOrder = card?.order !== undefined ? card.order : 999;
-      
-      const cardRef = ref(db, `columns/${columnId}/cards/${cardId}`);
-      update(cardRef, {
-        text: newText,
-        order: currentOrder // 기존 order 유지
-      });
+      try {
+        const column = columns.find(c => c.id === columnId);
+        const card = column?.cards?.[cardId];
+        const currentOrder = card?.order !== undefined ? card.order : 999;
+        
+        console.log('📤 [카드 수정 요청]', { columnId, cardId, newText });
+        const response = await fetch(`${API_URL}/api/columns/${columnId}/cards/${cardId}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            text: newText,
+            order: currentOrder
+          })
+        });
+        
+        console.log('📥 [카드 수정 응답]', response.status, response.statusText);
+        
+        if (response.ok) {
+          const data = await response.json();
+          console.log('✅ [카드 수정 성공]', data);
+          fetchColumns();
+        } else {
+          const errorData = await response.json().catch(() => ({ message: '알 수 없는 오류' }));
+          console.error('❌ [카드 수정 실패]', errorData);
+          alert(`카드 수정 실패: ${errorData.message || response.statusText}`);
+        }
+      } catch (error) {
+        console.error('❌ [카드 수정 오류]', error);
+        alert(`카드 수정 중 오류가 발생했습니다: ${error.message}`);
+      }
     }
     setEditingCardId(null);
   };
 
-  const handleDeleteCard = (columnId, cardId) => {
+  const handleDeleteCard = async (columnId, cardId) => {
     if (window.confirm('이 카드를 삭제하시겠습니까?')) {
-      const cardRef = ref(db, `columns/${columnId}/cards/${cardId}`);
-      remove(cardRef);
+      try {
+        console.log('📤 [카드 삭제 요청]', { columnId, cardId });
+        const response = await fetch(`${API_URL}/api/columns/${columnId}/cards/${cardId}`, {
+          method: 'DELETE'
+        });
+        
+        console.log('📥 [카드 삭제 응답]', response.status, response.statusText);
+        
+        if (response.ok) {
+          const data = await response.json();
+          console.log('✅ [카드 삭제 성공]', data);
+          fetchColumns();
+        } else {
+          const errorData = await response.json().catch(() => ({ message: '알 수 없는 오류' }));
+          console.error('❌ [카드 삭제 실패]', errorData);
+          alert(`카드 삭제 실패: ${errorData.message || response.statusText}`);
+        }
+      } catch (error) {
+        console.error('❌ [카드 삭제 오류]', error);
+        alert(`카드 삭제 중 오류가 발생했습니다: ${error.message}`);
+      }
     }
   };
 
-  const handleMoveCard = (fromColumnId, toColumnId, cardId, targetIndex = null) => {
+  const handleMoveCard = async (fromColumnId, toColumnId, cardId, targetIndex = null) => {
     const fromColumn = columns.find(c => c.id === fromColumnId);
     if (!fromColumn || !fromColumn.cards || !fromColumn.cards[cardId]) {
       console.error('카드 이동 실패: 카드를 찾을 수 없습니다.');
@@ -186,22 +306,37 @@ function App() {
     const toColumn = columns.find(c => c.id === toColumnId);
     const toCardCount = toColumn && toColumn.cards ? Object.keys(toColumn.cards).length : 0;
     
-    const newCardRef = ref(db, `columns/${toColumnId}/cards`);
-    push(newCardRef, {
-      text: cardData.text,
-      order: toCardCount
-    }).then(() => {
-      const oldCardRef = ref(db, `columns/${fromColumnId}/cards/${cardId}`);
-      remove(oldCardRef).catch((error) => {
-        console.error('카드 삭제 오류:', error);
+    try {
+      // 새 위치에 카드 추가
+      const addResponse = await fetch(`${API_URL}/api/columns/${toColumnId}/cards`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text: cardData.text,
+          order: toCardCount
+        })
       });
-    }).catch((error) => {
-      console.error('카드 추가 오류:', error);
+      
+      if (addResponse.ok) {
+        // 기존 카드 삭제
+        const deleteResponse = await fetch(`${API_URL}/api/columns/${fromColumnId}/cards/${cardId}`, {
+          method: 'DELETE'
+        });
+        if (deleteResponse.ok) {
+          fetchColumns();
+        } else {
+          console.error('카드 삭제 오류');
+        }
+      } else {
+        alert('카드를 이동하는 중 오류가 발생했습니다.');
+      }
+    } catch (error) {
+      console.error('카드 이동 오류:', error);
       alert('카드를 이동하는 중 오류가 발생했습니다: ' + error.message);
-    });
+    }
   };
 
-  const handleCardReorder = (columnId, cardId, targetIndex) => {
+  const handleCardReorder = async (columnId, cardId, targetIndex) => {
     const column = columns.find(c => c.id === columnId);
     if (!column || !column.cards) {
       return;
@@ -227,15 +362,22 @@ function App() {
     cardsArray.splice(targetIndex, 0, movedCard);
     
     // 순서 업데이트
-    cardsArray.forEach((card, index) => {
-      const cardRef = ref(db, `columns/${columnId}/cards/${card.id}`);
-      update(cardRef, {
-        order: index
-      });
-    });
+    try {
+      const updatePromises = cardsArray.map((card, index) =>
+        fetch(`${API_URL}/api/columns/${columnId}/cards/${card.id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ order: index })
+        })
+      );
+      await Promise.all(updatePromises);
+      fetchColumns();
+    } catch (error) {
+      console.error('카드 순서 업데이트 오류:', error);
+    }
   };
 
-  const handleColumnOrderUpdate = (draggedId, targetId) => {
+  const handleColumnOrderUpdate = async (draggedId, targetId) => {
     const draggedIndex = columns.findIndex(c => c.id === draggedId);
     const targetIndex = columns.findIndex(c => c.id === targetId);
     
@@ -244,12 +386,19 @@ function App() {
       const [draggedColumn] = updatedColumns.splice(draggedIndex, 1);
       updatedColumns.splice(targetIndex, 0, draggedColumn);
       
-      updatedColumns.forEach((column, index) => {
-        const columnRef = ref(db, `columns/${column.id}`);
-        update(columnRef, {
-          order: index
-        });
-      });
+      try {
+        const updatePromises = updatedColumns.map((column, index) =>
+          fetch(`${API_URL}/api/columns/${column.id}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ order: index })
+          })
+        );
+        await Promise.all(updatePromises);
+        fetchColumns();
+      } catch (error) {
+        console.error('칼럼 순서 업데이트 오류:', error);
+      }
     }
   };
 
