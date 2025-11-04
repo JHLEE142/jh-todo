@@ -3,7 +3,7 @@ import Column from './components/Column';
 import ColumnModal from './components/ColumnModal';
 import './styles.css';
 
-const API_URL = 'http://localhost:5000';
+const API_URL = 'https://todo-backend-j388.onrender.com';
 
 function App() {
   const [columns, setColumns] = useState([]);
